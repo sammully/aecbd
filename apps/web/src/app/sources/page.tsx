@@ -52,7 +52,7 @@ export default function SourcesPage() {
         e.preventDefault();
         setIsBulking(true);
 
-        const urls = bulkUrls.split(/\r?\n|,/).map(u => u.trim()).filter(u => u.length > 0);
+        const urls = bulkUrls.split(/[\s,]+/).map(u => u.trim()).filter(u => u.length > 0);
 
         const payloadSources = urls.map(url => {
             const isRss = url.includes('.xml') || url.includes('/rss') || url.includes('feed');

@@ -20,6 +20,13 @@ from database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
+# Standard browser headers to avoid 403 Forbidden errors
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 COMMERCIAL_KEYWORDS = {
     "Contracts": ["awarded", "won contract", "selected for", "deal signed", "contract extension"],
     "M&A": ["acquisition", "merger", "acquired by", "merged with", "buyout"],
@@ -108,6 +115,7 @@ def fetch_rss_feed(source: models.Source, db):
 
 def fetch_article(url: str, source: models.Source, db) -> int:
     """Helper to fetch, clean, and store a single article URL."""
+    url = url.strip()
     checksum = generate_checksum(source.url, url) # use URL as dedupe key for web
     existing = db.query(models.Item).filter(
         models.Item.source_id == source.id,
@@ -118,7 +126,7 @@ def fetch_article(url: str, source: models.Source, db) -> int:
         return 0
 
     try:
-        response = httpx.get(url, timeout=10.0, follow_redirects=True)
+        response = httpx.get(url, headers=DEFAULT_HEADERS, timeout=15.0, follow_redirects=True)
         response.raise_for_status()
         html = response.text
     except Exception as e:
@@ -166,7 +174,7 @@ from urllib.parse import urlparse, urljoin
 def fetch_web_page(source: models.Source, db):
     """Treats the source URL as an index page, and scrapes internal links."""
     try:
-        response = httpx.get(source.url, timeout=10.0, follow_redirects=True)
+        response = httpx.get(source.url.strip(), headers=DEFAULT_HEADERS, timeout=15.0, follow_redirects=True)
         response.raise_for_status()
         html = response.text
     except Exception as e:
@@ -180,23 +188,24 @@ def fetch_web_page(source: models.Source, db):
     # Extract internal links
     article_links = set()
     for a in soup.find_all('a', href=True):
-        href = a['href']
-        # Resolve relative links
-        full_url = urljoin(base_url, href)
+        href = a['href'].strip()
+        # Resolve relative links relative to the source URL (important!)
+        full_url = urljoin(source.url, href)
         parsed_url = urlparse(full_url)
         
-        # Only keep links to the same domain that look like articles (long paths)
-        if parsed_url.netloc == parsed_source.netloc and len(parsed_url.path) > 10:
-             # Basic filter to avoid index pages or author pages
-            if not parsed_url.path.startswith('/category/') and not parsed_url.path.startswith('/tag/'):
+        # Only keep links to the same domain that look like articles
+        if parsed_url.netloc == parsed_source.netloc and len(parsed_url.path) > 8:
+             # Basic filter to avoid index pages or common non-article paths
+            skip_paths = ['/category/', '/tag/', '/author/', '/search/']
+            if not any(full_url.split(parsed_url.netloc)[-1].startswith(p) for p in skip_paths):
                 article_links.add(full_url)
 
     items_added = 0
-    # Scrape up to 5 new articles per run to avoid rate limits
-    for link in list(article_links)[:10]:
+    # Scrape up to 8 new articles per run (increased from 5)
+    for link in list(article_links)[:15]:
         added = fetch_article(link, source, db)
         items_added += added
-        if items_added >= 5: 
+        if items_added >= 8: 
             break
             
     db.commit()
