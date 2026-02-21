@@ -1,0 +1,75 @@
+name: aec-feeds
+services:
+  # Database
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: aec_user
+      POSTGRES_PASSWORD: aec_password
+      POSTGRES_DB: aec_feeds
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aec_user -d aec_feeds"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Celery jobs & caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # API Backend
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: ../../infra/podman/api.Containerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+psycopg://aec_user:aec_password@db:5432/aec_feeds
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./apps/api:/app # Live reload
+
+  # Ingestion Worker
+  worker:
+    build:
+      context: ./services/ingestion
+      dockerfile: ../../infra/podman/worker.Containerfile
+    environment:
+      - DATABASE_URL=postgresql+psycopg://aec_user:aec_password@db:5432/aec_feeds
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./services/ingestion:/app
+      - ./apps/api:/apps/api
+
+  # Next.js Frontend
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: ../../infra/podman/web.Containerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+
+volumes:
+  pgdata:
